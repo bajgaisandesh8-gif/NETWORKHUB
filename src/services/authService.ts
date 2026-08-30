@@ -28,11 +28,11 @@ class AuthService {
 
   private loadInitialSession() {
     if (isSupabaseConfigured) return;
-
     try {
       const stored = localStorage.getItem(AUTH_STORAGE_KEY);
       if (stored) {
-        this.currentProfile = JSON.parse(stored) as UserProfile;
+        const parsed = JSON.parse(stored) as UserProfile;
+        this.currentProfile = isUserRole(parsed.role) ? parsed : null;
       } else {
         this.currentProfile = {
           id: 'local-student-01',
@@ -52,8 +52,13 @@ class AuthService {
     if (!supabase) return;
 
     this.supabaseUnsubscribe = supabase.auth.onAuthStateChange((_event, session) => {
-      this.currentProfile = session?.user ? this.profileFromSupabaseUser(session.user) : null;
-      this.notifyListeners();
+      if (!session?.user) {
+        this.currentProfile = null;
+        this.notifyListeners();
+        return;
+      }
+      // Do not trust user_metadata.role. Fetch the database profile protected by RLS.
+      void this.hydrateSupabaseProfile(session.user.id, session.user.email || '');
     }).data.subscription.unsubscribe;
 
     void this.restoreSupabaseSession();
@@ -61,37 +66,52 @@ class AuthService {
 
   private async restoreSupabaseSession() {
     if (!supabase) return;
-    const { data } = await supabase.auth.getUser();
-    this.currentProfile = data.user ? this.profileFromSupabaseUser(data.user) : null;
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !data.user) {
+      this.currentProfile = null;
+      this.notifyListeners();
+      return;
+    }
+    await this.hydrateSupabaseProfile(data.user.id, data.user.email || '');
+  }
+
+  private async hydrateSupabaseProfile(userId: string, email: string): Promise<void> {
+    if (!supabase) return;
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, full_name, role, avatar_url, created_at')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Unable to load user profile:', error.message);
+      this.currentProfile = null;
+      this.notifyListeners();
+      return;
+    }
+
+    if (!data) {
+      this.currentProfile = null;
+      this.notifyListeners();
+      return;
+    }
+
+    const role: UserRole = isUserRole(data.role) ? data.role : 'student';
+    this.currentProfile = {
+      id: data.id,
+      email,
+      fullName: data.full_name || email.split('@')[0] || 'Networking Student',
+      role,
+      avatarUrl: data.avatar_url || undefined,
+      createdAt: data.created_at || new Date().toISOString()
+    };
     this.notifyListeners();
   }
 
-  private profileFromSupabaseUser(user: { id: string; email?: string; user_metadata?: Record<string, unknown>; created_at?: string }): UserProfile {
-    const metadata = user.user_metadata || {};
-    const requestedRole = metadata.role;
-
-    // Never trust a client-provided role for privileged access.
-    // Instructor/admin authorization must be established server-side later.
-    const role: UserRole = requestedRole === 'instructor' ? 'instructor' : 'student';
-
-    return {
-      id: user.id,
-      email: user.email || '',
-      fullName: typeof metadata.full_name === 'string' && metadata.full_name.trim()
-        ? metadata.full_name
-        : (user.email?.split('@')[0] || 'Networking Student'),
-      role,
-      avatarUrl: typeof metadata.avatar_url === 'string' ? metadata.avatar_url : undefined,
-      createdAt: user.created_at || new Date().toISOString()
-    };
-  }
-
   private saveLocalSession() {
-    if (this.currentProfile) {
-      localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(this.currentProfile));
-    } else {
-      localStorage.removeItem(AUTH_STORAGE_KEY);
-    }
+    if (this.currentProfile) localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(this.currentProfile));
+    else localStorage.removeItem(AUTH_STORAGE_KEY);
     this.notifyListeners();
   }
 
@@ -106,9 +126,7 @@ class AuthService {
   public subscribe(callback: (profile: UserProfile | null) => void): () => void {
     this.listeners.push(callback);
     callback(this.currentProfile);
-    return () => {
-      this.listeners = this.listeners.filter(cb => cb !== callback);
-    };
+    return () => { this.listeners = this.listeners.filter(cb => cb !== callback); };
   }
 
   public async login(email: string, password?: string): Promise<UserProfile> {
@@ -117,8 +135,8 @@ class AuthService {
       const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (error) throw new Error(error.message);
       if (!data.user) throw new Error('Login succeeded but no user session was returned.');
-      this.currentProfile = this.profileFromSupabaseUser(data.user);
-      this.notifyListeners();
+      await this.hydrateSupabaseProfile(data.user.id, data.user.email || email.trim());
+      if (!this.currentProfile) throw new Error('Account exists, but its profile could not be loaded.');
       return this.currentProfile;
     }
 
@@ -133,18 +151,14 @@ class AuthService {
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password,
-        options: { data: { full_name: fullName.trim(), role: 'student' } }
+        options: { data: { full_name: fullName.trim() } }
       });
       if (error) throw new Error(error.message);
       if (!data.user) throw new Error('Account creation failed.');
+      if (!data.session) throw new Error('Account created. Please check your email to confirm your account before signing in.');
 
-      // If email confirmation is enabled, Supabase intentionally returns no session.
-      if (!data.session) {
-        throw new Error('Account created. Please check your email to confirm your account before signing in.');
-      }
-
-      this.currentProfile = this.profileFromSupabaseUser(data.user);
-      this.notifyListeners();
+      await this.hydrateSupabaseProfile(data.user.id, data.user.email || email.trim());
+      if (!this.currentProfile) throw new Error('Account created, but the user profile could not be loaded.');
       return this.currentProfile;
     }
 
@@ -153,15 +167,11 @@ class AuthService {
     return res.profile;
   }
 
-  public async signUp(email: string, fullName: string, role: UserRole = 'student'): Promise<{ success: boolean; profile?: UserProfile; error?: string }> {
+  public async signUp(email: string, fullName: string, _role: UserRole = 'student'): Promise<{ success: boolean; profile?: UserProfile; error?: string }> {
     try {
-      const safeRole: UserRole = role === 'student' ? 'student' : 'student';
       const newProfile: UserProfile = {
         id: `usr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        email: email.trim(),
-        fullName: fullName.trim(),
-        role: safeRole,
-        createdAt: new Date().toISOString()
+        email: email.trim(), fullName: fullName.trim(), role: 'student', createdAt: new Date().toISOString()
       };
       this.currentProfile = newProfile;
       this.saveLocalSession();
@@ -193,17 +203,16 @@ class AuthService {
     if (isSupabaseConfigured && supabase) {
       const { error } = await supabase.auth.signOut();
       if (error) throw new Error(error.message);
+      this.currentProfile = null;
+      this.notifyListeners();
       return;
     }
     this.currentProfile = null;
     this.saveLocalSession();
   }
 
-  /**
-   * Role changes are intentionally local-demo only. Privileged roles must be
-   * assigned server-side; never allow the browser to promote itself to admin.
-   */
   public updateRole(role: UserRole) {
+    // Local demo only. Production roles come from public.profiles + RLS.
     if (isSupabaseConfigured) return;
     if (this.currentProfile && role !== 'admin') {
       this.currentProfile.role = role;
@@ -211,9 +220,7 @@ class AuthService {
     }
   }
 
-  public isSupabaseConnected(): boolean {
-    return isSupabaseConfigured;
-  }
+  public isSupabaseConnected(): boolean { return isSupabaseConfigured; }
 
   public destroy() {
     this.supabaseUnsubscribe?.();
