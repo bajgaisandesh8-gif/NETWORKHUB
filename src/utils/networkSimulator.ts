@@ -1,16 +1,15 @@
-import { 
-  NetworkTopology, 
-  NetworkDevice, 
-  PacketTraceResult, 
-  PacketHop, 
-  RoutingTableEntry, 
-  DnsRecord, 
-  DhcpScope, 
-  FirewallRule 
+import {
+  NetworkTopology,
+  NetworkDevice,
+  PacketTraceResult,
+  PacketHop,
+  RoutingTableEntry,
+  DnsRecord,
+  DhcpScope,
+  FirewallRule
 } from '../types';
 import { ipToNumber, cidrToMask, isSameSubnet } from './subnetCalculator';
 
-// Helper: match IP against CIDR subnet (e.g., is "192.168.10.15" in "192.168.10.0/24")
 export function isIpInSubnet(ip: string, subnetWithCidr: string): boolean {
   if (subnetWithCidr === 'ANY' || subnetWithCidr === '0.0.0.0/0') return true;
   try {
@@ -24,7 +23,6 @@ export function isIpInSubnet(ip: string, subnetWithCidr: string): boolean {
   }
 }
 
-/** Longest Prefix Match Router Decision Engine */
 export function lookupRoutingTable(
   routingTable: RoutingTableEntry[] | undefined,
   destIp: string,
@@ -37,13 +35,15 @@ export function lookupRoutingTable(
   try { ipToNumber(destIp); } catch { return { action: 'drop', reason: `Invalid destination IPv4 address: ${destIp}` }; }
 
   for (const iface of connectedInterfaces) {
-    if (iface.ip && iface.subnetMask && isSameSubnet(destIp, iface.ip, iface.subnetMask)) {
-      return {
-        matchedRoute: { destination: iface.ip, nextHop: 'Directly Connected', interface: iface.name, type: 'connected' },
-        action: 'forward',
-        reason: `Directly connected network on interface ${iface.name}`
-      };
-    }
+    try {
+      if (iface.ip && iface.subnetMask && isSameSubnet(destIp, iface.ip, iface.subnetMask)) {
+        return {
+          matchedRoute: { destination: iface.ip, nextHop: 'Directly Connected', interface: iface.name, type: 'connected' },
+          action: 'forward',
+          reason: `Directly connected network on interface ${iface.name}`
+        };
+      }
+    } catch { /* Ignore malformed interface configuration. */ }
   }
 
   if (!routingTable || routingTable.length === 0) {
@@ -59,8 +59,7 @@ export function lookupRoutingTable(
     try {
       const mask = route.subnetMask || (route.cidr !== undefined ? cidrToMask(route.cidr) : '255.255.255.0');
       if (isSameSubnet(destIp, route.destination, mask)) {
-        const prefixLen = maskToPrefixLength(mask);
-        matches.push({ route, prefixLen });
+        matches.push({ route, prefixLen: maskToPrefixLength(mask) });
       }
     } catch { /* Ignore malformed route entries. */ }
   }
@@ -68,11 +67,11 @@ export function lookupRoutingTable(
   if (matches.length === 0) return { action: 'drop', reason: `Routing table has no route to ${destIp} (ICMP Destination Host/Network Unreachable)` };
 
   matches.sort((a, b) => b.prefixLen - a.prefixLen);
-  const bestMatch = matches[0].route;
+  const best = matches[0];
   return {
-    matchedRoute: bestMatch,
+    matchedRoute: best.route,
     action: 'forward',
-    reason: `Matched ${bestMatch.destination}/${bestMatch.cidr !== undefined ? bestMatch.cidr : matches[0].prefixLen} via next-hop ${bestMatch.nextHop} on ${bestMatch.interface} (LPM /${matches[0].prefixLen})`
+    reason: `Matched ${best.route.destination}/${best.route.cidr !== undefined ? best.route.cidr : best.prefixLen} via next-hop ${best.route.nextHop} on ${best.route.interface} (LPM /${best.prefixLen})`
   };
 }
 
@@ -82,7 +81,6 @@ function maskToPrefixLength(mask: string): number {
   return bits.replace(/0/g, '').length;
 }
 
-/** Stateful Firewall Rule Evaluator */
 export function evaluateFirewall(
   rules: FirewallRule[] | undefined,
   sourceIp: string,
@@ -97,11 +95,7 @@ export function evaluateFirewall(
     const srcMatch = isIpInSubnet(sourceIp, rule.sourceSubnet);
     const dstMatch = isIpInSubnet(destIp, rule.destSubnet);
     const protoMatch = rule.protocol === 'ANY' || rule.protocol.toUpperCase() === protocol.toUpperCase();
-
-    let portMatch = true;
-    if (rule.portRange && rule.portRange !== 'ANY') {
-      portMatch = parsePortRange(rule.portRange, port);
-    }
+    const portMatch = !rule.portRange || rule.portRange === 'ANY' || parsePortRange(rule.portRange, port);
 
     if (srcMatch && dstMatch && protoMatch && portMatch) {
       const allowed = rule.action !== 'DENY';
@@ -132,7 +126,6 @@ function parsePortRange(value: string, port: number): boolean {
   });
 }
 
-/** DNS Resolution Engine */
 export function resolveDns(domainOrIp: string, dnsServerDevice: NetworkDevice | undefined): {
   resolvedIp?: string; recordType?: string; found: boolean; explanation: string;
 } {
@@ -163,7 +156,6 @@ export function resolveDns(domainOrIp: string, dnsServerDevice: NetworkDevice | 
   return { found: false, explanation: `DNS Server ${dnsServerDevice.name} returned NXDOMAIN for ${query}.` };
 }
 
-/** DHCP Simulation (DORA Workflow) */
 export function simulateDhcpRequest(clientDevice: NetworkDevice, dhcpServerDevice: NetworkDevice): {
   success: boolean; assignedIp?: string; subnetMask?: string; gateway?: string; dns?: string;
   steps: { step: string; from: string; to: string; description: string }[]; failureReason?: string;
@@ -174,9 +166,16 @@ export function simulateDhcpRequest(clientDevice: NetworkDevice, dhcpServerDevic
   }
 
   try {
-    ipToNumber(scope.startIp); ipToNumber(scope.gateway); ipToNumber(scope.dnsServer);
+    ipToNumber(scope.startIp);
+    ipToNumber(scope.gateway);
+    ipToNumber(scope.dnsServer);
+    cidrToMask(Number(scope.subnetMask));
   } catch {
-    return { success: false, steps: [], failureReason: 'DHCP scope contains an invalid IPv4 address.' };
+    return { success: false, steps: [], failureReason: 'DHCP scope contains an invalid IPv4 address or subnet mask.' };
+  }
+
+  if (!Number.isFinite(scope.leaseDurationHours) || scope.leaseDurationHours <= 0) {
+    return { success: false, steps: [], failureReason: 'DHCP scope contains an invalid lease duration.' };
   }
 
   const steps = [
@@ -189,7 +188,6 @@ export function simulateDhcpRequest(clientDevice: NetworkDevice, dhcpServerDevic
   return { success: true, assignedIp: scope.startIp, subnetMask: scope.subnetMask, gateway: scope.gateway, dns: scope.dnsServer, steps };
 }
 
-/** Comprehensive Packet Journey & Hop-by-Hop Trace Engine */
 export function simulatePacketTrace(
   topology: NetworkTopology,
   sourceIdOrIp: string,
@@ -222,10 +220,12 @@ export function simulatePacketTrace(
     return { success: false, sourceDevice: srcDev.name, destinationDevice: dstIp, totalHops: 1, hops: [], summary: `Destination '${dstIp}' is not a valid IPv4 address.`, failureReason: 'Invalid destination IP' };
   }
 
+  if (!Number.isInteger(destPort) || destPort < 0 || destPort > 65535) {
+    return makeFailure(srcDev, dstDev, dstIp, srcIp, protocol, 'Invalid Destination Port', 'Transport', 'Invalid destination port', `Destination port ${destPort} is outside the valid TCP/UDP range 0-65535.`);
+  }
   if (srcDev.status === 'down') return makeFailure(srcDev, dstDev, dstIp, srcIp, protocol, 'Interface Down', 'Physical', 'Interface disabled', `${srcDev.name} is powered off or administratively down.`);
   if (!srcDev.ip) return makeFailure(srcDev, dstDev, dstIp, srcIp, protocol, 'Unconfigured IP', 'Network', 'Missing IPv4 address', `${srcDev.name} has no IPv4 address configured.`);
 
-  // Only UP links participate in path selection. This prevents BFS from choosing a broken shortcut.
   const graph: Record<string, { neighborId: string; connectionId: string; type: string; status: string }[]> = {};
   devices.forEach(d => { graph[d.id] = []; });
   connections.forEach(conn => {
@@ -236,7 +236,11 @@ export function simulatePacketTrace(
     }
   });
 
-  const isLocalSubnet = isSameSubnet(srcDev.ip, dstIp, srcDev.subnetMask || '255.255.255.0');
+  let isLocalSubnet = false;
+  try { isLocalSubnet = isSameSubnet(srcDev.ip, dstIp, srcDev.subnetMask || '255.255.255.0'); } catch {
+    return makeFailure(srcDev, dstDev, dstIp, srcIp, protocol, 'Invalid Source Subnet', 'Network', 'Invalid subnet configuration', `${srcDev.name} has an invalid subnet mask.`);
+  }
+
   if (!isLocalSubnet && !srcDev.gateway && srcDev.type !== 'router') {
     return makeFailure(srcDev, dstDev, dstIp, srcIp, protocol, 'No Default Gateway', 'Network', 'Missing Default Gateway', `${srcDev.name} has no default gateway for off-subnet traffic.`, 'Configure a gateway in the same subnet as the source interface.');
   }
@@ -273,22 +277,22 @@ export function simulatePacketTrace(
     const isFirstHop = i === 0;
     const isLastHop = i === foundPath.length - 1;
     const nextDev = !isLastHop ? devices.find(d => d.id === foundPath[i + 1]) : null;
+    const hopNumber = i + 1;
 
-    // A device that is down must not participate in forwarding even if a stale topology path exists.
     if (currentDev.status === 'down') {
-      hops.push(makeHop(currentDev, srcIp, dstIp, protocol, ttl, 'Interface Down', 'Physical', 'dropped', 'Interface disabled', `${currentDev.name} is down and cannot forward traffic.`, nextDev));
+      hops.push(makeHop(currentDev, srcIp, dstIp, protocol, ttl, 'Interface Down', 'Physical', 'dropped', 'Interface disabled', `${currentDev.name} is down and cannot forward traffic.`, nextDev, hopNumber));
       hasFailed = true; failureReason = `Interface down on ${currentDev.name}`; dropTip = 'Power on the device or enable its interface.'; break;
     }
 
     if (currentDev.type === 'switch' && isFirstHop && nextDev && srcDev.vlan && dstDev?.vlan && srcDev.vlan !== dstDev.vlan && !devices.some(d => d.type === 'router' || d.type === 'firewall')) {
-      hops.push(makeHop(currentDev, srcIp, dstIp, protocol, ttl, 'VLAN Segmentation Drop', 'Data Link', 'dropped', 'VLAN Isolation', `${currentDev.name} isolated VLAN ${srcDev.vlan} from VLAN ${dstDev.vlan}.`, nextDev));
+      hops.push(makeHop(currentDev, srcIp, dstIp, protocol, ttl, 'VLAN Segmentation Drop', 'Data Link', 'dropped', 'VLAN Isolation', `${currentDev.name} isolated VLAN ${srcDev.vlan} from VLAN ${dstDev.vlan}.`, nextDev, hopNumber));
       hasFailed = true; failureReason = `VLAN Isolation: VLAN ${srcDev.vlan} cannot talk to VLAN ${dstDev.vlan} without a router`; dropTip = 'Add an inter-VLAN router/L3 switch or place both endpoints in the same VLAN.'; break;
     }
 
     if (currentDev.type === 'firewall' || currentDev.services?.firewallEnabled) {
       const fwEval = evaluateFirewall(currentDev.services?.firewallRules, srcIp, dstIp, protocol, destPort);
       if (!fwEval.allowed) {
-        hops.push(makeHop(currentDev, srcIp, dstIp, protocol, ttl, 'Firewall Drop (ACL DENY)', 'Network', 'dropped', 'Blocked by Firewall Rule', `${currentDev.name} blocked the packet: ${fwEval.reason}`, nextDev));
+        hops.push(makeHop(currentDev, srcIp, dstIp, protocol, ttl, 'Firewall Drop (ACL DENY)', 'Network', 'dropped', 'Blocked by Firewall Rule', `${currentDev.name} blocked the packet: ${fwEval.reason}`, nextDev, hopNumber));
         hasFailed = true; failureReason = fwEval.reason; dropTip = `Adjust the firewall rule to allow ${protocol} traffic on port ${destPort}.`; break;
       }
     }
@@ -314,7 +318,7 @@ export function simulatePacketTrace(
     } else if (currentDev.type === 'router') {
       ttl--;
       if (ttl <= 0) {
-        hops.push(makeHop(currentDev, srcIp, dstIp, protocol, ttl, 'TTL Expired', 'Network', 'dropped', 'TTL expired', `${currentDev.name} discarded the packet because its IPv4 TTL reached zero.`, nextDev));
+        hops.push(makeHop(currentDev, srcIp, dstIp, protocol, ttl, 'TTL Expired', 'Network', 'dropped', 'TTL expired', `${currentDev.name} discarded the packet because its IPv4 TTL reached zero.`, nextDev, hopNumber));
         hasFailed = true; failureReason = 'TTL expired'; dropTip = 'Check for a routing loop in the simulated topology.'; break;
       }
       hopAction = `L3 Routing & TTL Decrement (TTL=${ttl})`;
@@ -329,7 +333,7 @@ export function simulatePacketTrace(
     }
 
     hops.push({
-      hopNumber: i + 1, deviceId: currentDev.id, deviceName: currentDev.name, deviceType: currentDev.type,
+      hopNumber, deviceId: currentDev.id, deviceName: currentDev.name, deviceType: currentDev.type,
       action: hopAction, explanation: hopExplanation, whyExplanation, layer: hopLayer,
       sourceIp: srcIp, destIp: dstIp, sourceMac: currentDev.mac || '00:50:56:A1:B2:C3',
       destMac: nextDev ? (nextDev.mac || '00:50:56:D4:E5:F6') : (dstDev?.mac || '00:50:56:D4:E5:F6'),
@@ -350,10 +354,10 @@ export function simulatePacketTrace(
 function makeHop(
   device: NetworkDevice, sourceIp: string, destIp: string, protocol: string, ttl: number,
   action: string, layer: 'Application' | 'Transport' | 'Network' | 'Data Link' | 'Physical',
-  status: 'forwarded' | 'dropped', dropReason: string, explanation: string, nextDev?: NetworkDevice | null
+  status: 'forwarded' | 'dropped', dropReason: string, explanation: string, nextDev?: NetworkDevice | null, hopNumber = 1
 ): PacketHop {
   return {
-    hopNumber: 1, deviceId: device.id, deviceName: device.name, deviceType: device.type, action, explanation,
+    hopNumber, deviceId: device.id, deviceName: device.name, deviceType: device.type, action, explanation,
     whyExplanation: explanation, layer, sourceIp, destIp, protocol, ttl, status, dropReason,
     sourceMac: device.mac || '00:50:56:A1:B2:C3', destMac: nextDev?.mac || '00:50:56:D4:E5:F6'
   };
@@ -361,9 +365,9 @@ function makeHop(
 
 function makeFailure(
   srcDev: NetworkDevice, dstDev: NetworkDevice | undefined, dstIp: string, srcIp: string, protocol: string,
-  action: string, layer: 'Network' | 'Physical', dropReason: string, explanation: string, troubleshootingTip = ''
+  action: string, layer: 'Network' | 'Physical' | 'Transport', dropReason: string, explanation: string, troubleshootingTip = ''
 ): PacketTraceResult {
-  const hop = makeHop(srcDev, srcIp, dstIp, protocol, 64, action, layer, 'dropped', dropReason, explanation);
+  const hop = makeHop(srcDev, srcIp, dstIp, protocol, 64, action, layer, 'dropped', dropReason, explanation, null, 1);
   return {
     success: false, sourceDevice: srcDev.name, destinationDevice: dstDev ? dstDev.name : dstIp, totalHops: 1,
     hops: [hop], summary: `Transmission failed: ${explanation}`, failureReason: dropReason, troubleshootingTip
