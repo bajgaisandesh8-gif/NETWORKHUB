@@ -1,0 +1,6 @@
+{
+  "name": "NET-LAB",
+  "description": "Build. Simulate. Understand Networks. Interactive networking laboratory, topology builder, packet journey simulation, troubleshooting assistant, and learning platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,10 @@
+-- ==============================================================================
+-- NET-LAB — PostgreSQL Seed Data
+-- ==============================================================================
+
+INSERT INTO public.labs (lab_number, title, category, difficulty, estimated_minutes, objective, scenario, passing_score, expected_result, explanation)
+VALUES 
+(1, 'Build a Basic Local Area Network (LAN)', 'Fundamentals', 'Beginner', 15, 'Construct a 2-PC single broadcast domain network connected by an Ethernet switch and verify peer-to-peer ping connectivity.', 'A branch office needs two workstations (PC1 and PC2) connected to a 24-port FastEthernet switch.', 100, 'PC1 successfully transmits ICMP Echo Request frames through Switch1 to PC2 and receives Echo Reply.', 'Within a single Layer 2 broadcast domain, devices on the same subnet resolve each other using ARP broadcasts and communicate through Ethernet switch MAC table forwarding.'),
+(2, 'Configure IPv4 Addressing & Default Gateway', 'Addressing', 'Beginner', 20, 'Configure static IPv4 addresses, subnet masks, and default gateways on a dual-subnet topology connected by a central router.', 'Marketing (192.168.10.0/24) and Engineering (192.168.20.0/24) need cross-subnet routing.', 100, 'Packets leave Subnet A, are routed through Router1 with TTL decrement, and arrive at Eng-Server.', 'When a host sends data to a destination IP on a different subnet, it sends the frame to its Default Gateway router.'),
+(7, 'VLAN Segmentation & Broadcast Domain Isolation', 'Switching', 'Intermediate', 25, 'Implement 802.1Q VLAN tags (VLAN 10 Sales, VLAN 20 Accounting) to enforce Layer 2 traffic isolation.', 'Sales and Accounting share one physical switch but must be partitioned into separate broadcast domains for security.', 100, 'Intra-VLAN frames communicate freely; inter-VLAN frames are blocked by the switch.', 'VLANs split a single physical switch into isolated logical switches, preventing unauthorized lateral movement.')
+ON CONFLICT (lab_number) DO NOTHING;
