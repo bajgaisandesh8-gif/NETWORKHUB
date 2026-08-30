@@ -33,10 +33,9 @@ export default function App() {
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
-  // Global Keyboard shortcuts: Ctrl+K / Cmd+K for Command Palette
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setIsSearchOpen(prev => !prev);
       }
@@ -56,117 +55,36 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col relative selection:bg-cyan-500 selection:text-slate-950">
-      {/* Dynamic Cyber Grid Network Canvas in Background */}
       <NetworkBackground />
 
-      {/* Primary Sticky Navigation Header */}
       <Navbar
         currentPage={currentPage}
         onNavigate={handleNavigate}
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenSyncModal={() => setIsSyncModalOpen(true)}
+        onOpenAuth={() => setIsAuthModalOpen(true)}
       />
 
-      {/* Main Interactive Viewport Container */}
       <main className="flex-1 z-10">
         {currentPage === 'landing' && <LandingPage onNavigate={handleNavigate} />}
-        
-        {currentPage === 'topology' && (
-          <TopologyLabPage
-            initialTopology={navigationMeta?.topology || currentTopology}
-            onNavigate={handleNavigate}
-          />
-        )}
-
-        {currentPage === 'packet-trace' && (
-          <PacketTracePage
-            topology={navigationMeta?.topology || currentTopology}
-            onNavigate={handleNavigate}
-          />
-        )}
-
-        {currentPage === 'diagnostics' && (
-          <DiagnosticsPage
-            topology={navigationMeta?.topology || currentTopology}
-            onNavigate={handleNavigate}
-          />
-        )}
-
-        {currentPage === 'tools' && (
-          <ToolsPage
-            initialTab={navigationMeta?.tab || 'subnet'}
-            onNavigate={handleNavigate}
-          />
-        )}
-
-        {currentPage === 'labs' && (
-          <LabsPage
-            initialLabId={navigationMeta?.selectedLabId}
-            onNavigate={handleNavigate}
-          />
-        )}
-
-        {currentPage === 'quizzes' && (
-          <QuizzesPage onNavigate={handleNavigate} />
-        )}
-
-        {currentPage === 'osi' && (
-          <OsiModelPage onNavigate={handleNavigate} />
-        )}
-
-        {currentPage === 'protocols' && (
-          <ProtocolsPage
-            initialProtocolId={navigationMeta?.protocolId}
-            onNavigate={handleNavigate}
-          />
-        )}
-
-        {currentPage === 'terminal' && (
-          <TerminalPage
-            topology={navigationMeta?.topology || currentTopology}
-            selectedDeviceId={navigationMeta?.deviceId}
-            onNavigate={handleNavigate}
-          />
-        )}
-
-        {currentPage === 'security' && (
-          <SecurityPage onNavigate={handleNavigate} />
-        )}
-
-        {currentPage === 'dashboard' && (
-          <DashboardPage onNavigate={handleNavigate} />
-        )}
-
-        {currentPage === 'workspace' && (
-          <WorkspacePage onNavigate={handleNavigate} />
-        )}
-
-        {currentPage === 'about' && (
-          <AboutPage onNavigate={handleNavigate} />
-        )}
+        {currentPage === 'topology' && <TopologyLabPage initialTopology={navigationMeta?.topology || currentTopology} onNavigate={handleNavigate} />}
+        {currentPage === 'packet-trace' && <PacketTracePage topology={navigationMeta?.topology || currentTopology} onNavigate={handleNavigate} />}
+        {currentPage === 'diagnostics' && <DiagnosticsPage topology={navigationMeta?.topology || currentTopology} onNavigate={handleNavigate} />}
+        {currentPage === 'tools' && <ToolsPage initialTab={navigationMeta?.tab || 'subnet'} onNavigate={handleNavigate} />}
+        {currentPage === 'labs' && <LabsPage initialLabId={navigationMeta?.selectedLabId} onNavigate={handleNavigate} />}
+        {currentPage === 'quizzes' && <QuizzesPage onNavigate={handleNavigate} />}
+        {currentPage === 'osi' && <OsiModelPage onNavigate={handleNavigate} />}
+        {currentPage === 'protocols' && <ProtocolsPage initialProtocolId={navigationMeta?.protocolId} onNavigate={handleNavigate} />}
+        {currentPage === 'terminal' && <TerminalPage topology={navigationMeta?.topology || currentTopology} selectedDeviceId={navigationMeta?.deviceId} onNavigate={handleNavigate} />}
+        {currentPage === 'security' && <SecurityPage onNavigate={handleNavigate} />}
+        {currentPage === 'dashboard' && <DashboardPage onNavigate={handleNavigate} />}
+        {currentPage === 'workspace' && <WorkspacePage onNavigate={handleNavigate} />}
+        {currentPage === 'about' && <AboutPage onNavigate={handleNavigate} />}
       </main>
 
-      {/* Global Command Palette (Cmd+K) */}
-      <CommandPalette
-        isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
-        onNavigate={handleNavigate}
-      />
-
-      {/* Supabase & Local-First Cloud Sync Configuration Modal */}
-      <CloudSyncStatusModal
-        isOpen={isSyncModalOpen}
-        onClose={() => setIsSyncModalOpen(false)}
-      />
-
-      {/* User Authentication & Profile Modal */}
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        onSuccess={() => {}}
-      />
-
-      {/* Footer with Creator Attribution & Quick Links */}
+      <CommandPalette isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} onNavigate={handleNavigate} />
+      <CloudSyncStatusModal isOpen={isSyncModalOpen} onClose={() => setIsSyncModalOpen(false)} />
+      <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} onSuccess={() => {}} />
       <Footer onNavigate={handleNavigate} />
     </div>
   );
