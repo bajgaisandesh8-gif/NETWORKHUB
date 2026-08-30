@@ -1,0 +1,10 @@
+{
+  "name": "NET-LAB — Interactive Networking Laboratory",
+  "short_name": "NET-LAB",
+  "description": "Interactive networking laboratory for learning, simulation, troubleshooting, subnetting, and practical labs.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#06b6d4",
+  "icons": []
+}
